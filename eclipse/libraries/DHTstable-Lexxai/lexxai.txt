@@ -1,0 +1,3 @@
+int dht::_readSensor(uint8_t pin, uint8_t wakeupDelay)
+....
+    pinMode(pin, INPUT_PULLUP);
