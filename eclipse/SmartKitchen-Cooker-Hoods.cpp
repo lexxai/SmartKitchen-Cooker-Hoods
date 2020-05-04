@@ -6,7 +6,7 @@
 #define USE_LOWPOWER   	1
 #define USE_BUTTON   	1
 #define USE_EPPROM   	1
-#define USE_DEBUGSER   	0
+#define USE_DEBUGSER   	1
 
 #if USE_EPPROM
 #include <EEPROM.h>
@@ -28,7 +28,9 @@
  */
 
 #if USE_LCD
-#include <LiquidCrystal.h>
+// include the library code:
+#include <Adafruit_LiquidCrystal.h>
+//#include <LiquidCrystal.h>
 // initialize the library with the numbers of the interface pins
 #define LCD_COLUMNS 12
 #define LCD_ROWS 	2
@@ -42,9 +44,14 @@
 #endif
 
 #if USE_DHT
+//#include <dhtnew.h>
 #include "./libraries/DHTstable-Lexxai/dht.h"
 #define DHT1_pin 		11     // Pin sensor is connected to
 #define DHT2_pin 		12     // Pin sensor is connected to
+#define DHTS_Power_pin	A2	   // Pin Power of sensors is connected to
+#define DHTS_Power_ON	HIGH
+#define DHTS_Power_OFF	LOW
+#define DHTS_Power_Reboot_Delay	1000
 #define DHT_Alarm_value 18 	   // Difference for humidity for alarm
 #endif
 
@@ -65,6 +72,8 @@
 #define SWITCH_PowerOFF 	2	//EXT INT0
 #define SWITCH_Mode	 		3	//EXT INT1
 #endif
+
+
 
 /**
  * TIME DELAYS DEFINITION
@@ -91,6 +100,7 @@
 
 #if USE_DHT
 dht DHT;
+//DHTNEW DHT;
 #endif
 
 /*
@@ -139,7 +149,7 @@ const char TextDeviceMode[] = { 'G', 'S', 'A', 'H', 'M', 'T' };
 #define TEXT_IO_POWER_ON   "IO POWER ON"
 #define TEXT_IO_POWER_TSAFE   "SAFE TIMER"
 #define TEXT_WELCOME1      "SMART KITCHEN"
-#define TEXT_WELCOME2      "lexxai 2019"
+#define TEXT_WELCOME2      "lexxai 2020"
 #else if TEXT_LANG == 'UKR'
 #define TEXT_MODE_CHANGED  "Pe\266\270\274 \267\274i\275e\275\275o"
 #define TEXT_GENERAL       "  Oc\275o\263\275\270\271"
@@ -153,7 +163,7 @@ const char TextDeviceMode[] = { 'G', 'S', 'A', 'H', 'M', 'T' };
 #define TEXT_IO_POWER_ON   "B\270\277\307\266. y\263i\274\272"
 #define TEXT_IO_POWER_TSAFE   "Ta\271\274ep \262e\267\276."
 #define TEXT_WELCOME1      "* B\245T\261\243KA *"
-#define TEXT_WELCOME2      "lexxai 2019"
+#define TEXT_WELCOME2      "lexxai 2020"
 #endif
 
 const String TextDeviceModeF[] = { TEXT_GENERAL, TEXT_HUMANDAMP,
@@ -169,6 +179,7 @@ const float ctemp12 = 0.2, chumidity12 = -4;
 //float delta;
 int humidity_delta;
 
+
 //time of start events
 unsigned long StartHumidityAlarm_timer = 0;
 unsigned long StopHumidityAlarm_timer = 0;
@@ -177,10 +188,13 @@ unsigned long delayAlarmAmperes_timer = 0;
 unsigned long AmpersLowLevel_timer = 0;
 unsigned long AmpersHighLevel_timer = 0;
 unsigned long RefreshDiplay_timer = 0;
+unsigned long DHTReboot_timer = 0;
+
 
 //status of alarms
 bool alarmHumidity = false;
 bool alarmAmperes = false;
+bool errorAmperes = false;
 bool statusSensor = false;
 unsigned int statusSensorError = 0;
 bool useDelayedStartAlarmAmperes = true;
@@ -208,7 +222,8 @@ EasyButton button_mode(SWITCH_Mode, 100, true, true);
 #endif
 
 #if USE_LCD
-LiquidCrystal lcd(LCD_RS, LCD_E, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
+Adafruit_LiquidCrystal lcd(LCD_RS, LCD_E, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
+//LiquidCrystal lcd(LCD_RS, LCD_E, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
 #endif
 
 /**
@@ -283,13 +298,13 @@ void relayon() {
 
 void onButton_poweroff_inerrupt() {
 #if USE_BUTTON
-	button_poweroff.read(INTERRUPT);
-	button_poweroff2.read(INTERRUPT);
+	button_poweroff.read();//INTERRUPT
+	button_poweroff2.read();//INTERRUPT
 #endif
 }
 void onButton_mode_inerrupt() {
 #if USE_BUTTON
-	button_mode.read(INTERRUPT);
+	button_mode.read();//INTERRUPT
 #endif
 }
 
@@ -368,6 +383,32 @@ void onButton_mode_pressed() {
 }
 
 /*
+ * Control PowerLine of DHT sensors
+ */
+void sensorPowerControl(bool state) {
+	digitalWrite(DHTS_Power_pin, state ? DHTS_Power_ON : DHTS_Power_OFF);
+#if USE_DEBUGSER
+	Serial.print(" SensorPowerControl: ");
+	Serial.println(state);
+#endif
+}
+
+bool sensorPowerState() {
+	return (digitalRead(DHTS_Power_pin) == DHTS_Power_ON);
+}
+
+void sensorPowerReboot() {
+	if ( sensorPowerState() && (DHTReboot_timer == 0) ){
+		DHTReboot_timer=millis();
+		sensorPowerControl(false);
+	}else if (millis()-DHTReboot_timer>=DHTS_Power_Reboot_Delay) {
+		DHTReboot_timer=0;
+		sensorPowerControl(true);
+	}
+}
+
+
+/*
  * Get Data value from two sensors DHT 2302 and calibrate values
  */
 
@@ -375,7 +416,7 @@ void getDataFromSensor() {
 	bool ok = false;
 	float delta;
 #if USE_DHT
-	ok = (DHT.read2302(DHT1_pin) == DHTLIB_OK);
+	ok = (sensorPowerState() &&  (DHT.read2302(DHT1_pin) == DHTLIB_OK));
 	if (ok) {
 		temp1 = DHT.temperature;
 		humidity1 = DHT.humidity;
@@ -440,6 +481,7 @@ char getMinutes(unsigned long msec) {
 void calculateHumidityAlarm() {
 	if (!statusSensor){
 		alarmHumidity = false;
+		sensorPowerReboot();
 		return;
 	}
 #if USE_DHT
@@ -495,7 +537,8 @@ float getVPP() {
 			minValue = readValue;
 		}
 	}
-
+	int delta=abs(maxValue-minValue);
+	errorAmperes=(delta>=0 and delta<3);
 	// Subtract min from max
 	// 5 Voltage max, 1024 = 2^10 bit ADC
 	result = ((maxValue - minValue) * 5.0) / 1024.0;
@@ -506,20 +549,23 @@ float getVPP() {
 void checkAmpersVoltage() {
 #if	USE_AMPERS
 	Voltage = getVPP();
-	VRMS = (Voltage / 2.0) * 0.707;
-	AmpsRMS = (VRMS * 1000) / mVperAmp;
+		VRMS = (Voltage / 2.0) * 0.707;
+		AmpsRMS = ((VRMS * 1000) / mVperAmp)-0.3;
+		if (errorAmperes || AmpsRMS<0) {
+			AmpsRMS=0;
+		}
+		if (AmpsRMS < AmpsLevel_LOW) {
+			AmpersHighLevel_timer = millis();
+			if ((millis() - AmpersLowLevel_timer) > AmperesAlarm_Stop_Time) {
+				alarmAmperes = false;
+			}
+		} else {
+			AmpersLowLevel_timer = millis();
+			if ((millis() - AmpersHighLevel_timer) > AmperesAlarm_Start_Time) {
+				alarmAmperes = true;
+			}
+		}
 
-	if (AmpsRMS < AmpsLevel_LOW) {
-		AmpersHighLevel_timer = millis();
-		if ((millis() - AmpersLowLevel_timer) > AmperesAlarm_Stop_Time) {
-			alarmAmperes = false;
-		}
-	} else {
-		AmpersLowLevel_timer = millis();
-		if ((millis() - AmpersHighLevel_timer) > AmperesAlarm_Start_Time) {
-			alarmAmperes = true;
-		}
-	}
 #endif
 }
 
@@ -559,8 +605,12 @@ void printStatus() {
 	} else {
 		//display Temperature, Humidity and their delta information
 		if (!statusSensor) {
-			lcd.print("SENSOR ERR:");
-			lcd.print(statusSensorError);
+			if (sensorPowerState()) {
+				lcd.print("SENS.PWR OFF");
+			} else {
+				lcd.print("SENSOR ERR:");
+				lcd.print(statusSensorError);
+			}
 		} else {
 			lcd.print(int(temp1));
 			lcd.write(customLCDChars::DEGREE);
@@ -576,7 +626,11 @@ void printStatus() {
 
 	//display Amperes information
 	lcd.setCursor(0, 1);
-	lcd.print(convertNumber2Char(AmpsRMS));
+	if (errorAmperes) {
+		lcd.print("X"); //Error information
+	} else {
+		lcd.print(convertNumber2Char(AmpsRMS));
+	}
 	//lcd.print("A");
 	lcd.write(customLCDChars::A);
 	//print information about spend time of io relay state every even of ten seconds if relay is on
@@ -708,6 +762,7 @@ void initLCDCustomChars() {
 #endif
 }
 
+
 /*
  * Init device setup
  */
@@ -741,6 +796,11 @@ void setup() {
 #if USE_DEBUGSER
 	Serial.begin(9600);
 	Serial.println("Kitchen setup ...");
+#endif
+
+#if USE_DHT
+	pinMode(DHTS_Power_pin, OUTPUT);
+	sensorPowerControl(true);
 #endif
 
 #ifdef _EasyButton_h
@@ -912,6 +972,8 @@ void checkModes() {
 		break;
 	}
 }
+
+
 
 /*
  * MAIN LOOP
